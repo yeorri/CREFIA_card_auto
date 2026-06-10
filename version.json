@@ -1,5 +1,5 @@
 {
-  "version": "1.0.2",
+  "version": "1.0.3",
   "download_url": "https://github.com/yeorri/CREFIA_card_auto/releases/latest",
-  "notes": "데이터 없는 거래처 빠른 처리 · 업체명별 폴더 저장 옵션 · 브라우저 창 고정(웨일/크롬 혼선 방지) · 안정성 개선"
+  "notes": "업체명에 괄호 등 특수문자가 있어도 정상 동작 (URL 안전 처리). 파일 이름은 원래 이름 유지."
 }

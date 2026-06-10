@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import sys
 import time
 import urllib.parse
@@ -49,12 +50,19 @@ def period_label(date_from, date_to):
     return f"{f[2:8]}~{t[2:8]}"
 
 
+def _url_safe_name(name):
+    """URL(csname)용 안전 이름. 사이트 보안(WAF)이 ( ) < > 따옴표 등 특수문자를 차단할 수 있어
+    한글/영문/숫자/공백/_/-만 남긴다. (파일 이름은 진짜 이름을 그대로 쓰므로 무관)"""
+    s = re.sub(r"[^0-9A-Za-z가-힣ㄱ-ㅎㅏ-ㅣ _\-]", "", str(name))
+    return s.strip() or "거래처"
+
+
 def purchase_url(name, date_from, date_to):
     q = urllib.parse.urlencode({
         "csauto": "1",
         "csfrom": digits(date_from),
         "csto": digits(date_to),
-        "csname": name,
+        "csname": _url_safe_name(name),
     })
     return f"{PURCHASE}?{q}"
 
