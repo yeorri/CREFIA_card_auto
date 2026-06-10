@@ -59,19 +59,28 @@ def purchase_url(name, date_from, date_to):
     return f"{PURCHASE}?{q}"
 
 
+# 지원 브라우저(크로미움 계열): 창 제목으로 찾는다. Chrome / 네이버 웨일 / Edge
+BROWSER_TITLE_KEYS = ("Chrome", "Whale", "웨일", "Edge")
+
+
 def focus_chrome():
+    """크로미움 계열 브라우저 창을 앞으로(찾아서 활성화)."""
     try:
-        for w in pyautogui.getWindowsWithTitle("Chrome"):
-            if not w.title:
-                continue
-            try:
-                if w.isMinimized:
-                    w.restore()
-                w.activate()
-                time.sleep(0.4)
-                return True
-            except Exception:
-                continue
+        seen = set()
+        for key in BROWSER_TITLE_KEYS:
+            for w in pyautogui.getWindowsWithTitle(key):
+                h = getattr(w, "_hWnd", None) or id(w)
+                if not w.title or h in seen:
+                    continue
+                seen.add(h)
+                try:
+                    if w.isMinimized:
+                        w.restore()
+                    w.activate()
+                    time.sleep(0.4)
+                    return True
+                except Exception:
+                    continue
     except Exception:
         pass
     return False
