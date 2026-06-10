@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "download_url": "https://github.com/yeorri/CREFIA_card_auto/releases/latest",
-  "notes": "최초 배포 (자동 업데이트 알림 포함)"
+  "notes": "네이버 웨일·Edge 브라우저 지원 추가"
 }
