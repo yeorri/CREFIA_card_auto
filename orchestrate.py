@@ -35,7 +35,7 @@ PURCHASE = "https://www.cardsales.or.kr/page/purchase/term"
 DOWNLOADS = Path.home() / "Downloads"
 
 DP_WAIT = 2.5
-DL_TIMEOUT = 30
+DL_TIMEOUT = 15   # 자료 있으면 보통 3~10초 내 다운. 데이터없음은 확장 신호로 더 빨리 잡음.
 DL_EXTS = ("*.xls", "*.xlsx", "*.xlsm", "*.csv")
 
 
@@ -62,27 +62,65 @@ def purchase_url(name, date_from, date_to):
 # 지원 브라우저(크로미움 계열): 창 제목으로 찾는다. Chrome / 네이버 웨일 / Edge
 BROWSER_TITLE_KEYS = ("Chrome", "Whale", "웨일", "Edge")
 
+# 작업 시작 시 고른 브라우저 창을 고정해 끝까지 같은 창만 사용(여러 브라우저 혼선 방지).
+_target_win = None
 
-def focus_chrome():
-    """크로미움 계열 브라우저 창을 앞으로(찾아서 활성화)."""
-    try:
-        seen = set()
-        for key in BROWSER_TITLE_KEYS:
+
+def _is_browser_title(t):
+    return bool(t) and any(k.lower() in t.lower() for k in BROWSER_TITLE_KEYS)
+
+
+def _first_browser_window():
+    seen = set()
+    for key in BROWSER_TITLE_KEYS:
+        try:
             for w in pyautogui.getWindowsWithTitle(key):
                 h = getattr(w, "_hWnd", None) or id(w)
                 if not w.title or h in seen:
                     continue
                 seen.add(h)
-                try:
-                    if w.isMinimized:
-                        w.restore()
-                    w.activate()
-                    time.sleep(0.4)
-                    return True
-                except Exception:
-                    continue
+                return w
+        except Exception:
+            continue
+    return None
+
+
+def pick_browser():
+    """사용할 브라우저 창을 결정해 고정. 현재 앞에 있는 창이 브라우저면 그걸, 아니면 처음 찾은 브라우저."""
+    global _target_win
+    _target_win = None
+    try:
+        aw = pyautogui.getActiveWindow()
+        if aw and _is_browser_title(aw.title):
+            _target_win = aw
+            return aw
     except Exception:
         pass
+    _target_win = _first_browser_window()
+    return _target_win
+
+
+def _activate(w):
+    try:
+        if w.isMinimized:
+            w.restore()
+        w.activate()
+        time.sleep(0.4)
+        return True
+    except Exception:
+        return False
+
+
+def focus_chrome():
+    """고정된 브라우저 창을 앞으로. 없거나 닫혔으면 다시 고른다."""
+    global _target_win
+    if _target_win is not None and _activate(_target_win):
+        return True
+    _target_win = None
+    w = _first_browser_window()
+    if w and _activate(w):
+        _target_win = w
+        return True
     return False
 
 
@@ -142,11 +180,30 @@ def snapshot_downloads():
     return out
 
 
+def _browser_title():
+    """현재 사용 중인 브라우저 창의 제목(확장이 'CSNODATA'로 바꾸면 감지용)."""
+    try:
+        if _target_win is not None:
+            return _target_win.title or ""
+    except Exception:
+        pass
+    w = _first_browser_window()
+    try:
+        return (w.title if w else "") or ""
+    except Exception:
+        return ""
+
+
 def wait_new_file(before, should_stop, timeout=DL_TIMEOUT):
+    """반환: Path(새 파일) / "NODATA"(확장이 창 제목을 CSNODATA로 바꿈) / None(타임아웃).
+
+    확장은 '조회결과 없음'이면 document.title='CSNODATA' → 창 제목으로 즉시 판단(다운로드·주소창 안 건드림)."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         if should_stop():
             raise _Stop()
+        if "CSNODATA" in _browser_title():   # 데이터없음 신호(창 제목)
+            return "NODATA"
         downloading = list(DOWNLOADS.glob("*.crdownload"))
         new = [f for f in snapshot_downloads() if f not in before]
         if new and not downloading:
@@ -177,7 +234,12 @@ def do_login(name, uid, pw, log, should_stop):
 
 
 def download_range(name, date_from, date_to, log, should_stop, check_login=False):
-    """매입내역 한 구간 조회 → 다운로드된 파일(Downloads 내 Path) 반환. 실패 시 None."""
+    """매입내역 한 구간 조회. 반환: ("signin"|"file"|"nofile", file_or_None).
+
+    - signin : 로그인 안 됨(로그인 화면으로 리다이렉트) → 재시도 대상
+    - file   : 다운로드 성공
+    - nofile : 로그인은 됐는데 파일 없음(해당 기간 데이터 없음 등) → 재로그인 무의미
+    """
     before = snapshot_downloads()
     log(f"[{name}] 매입 {digits(date_from)}~{digits(date_to)} 조회...")
     goto(purchase_url(name, date_from, date_to))
@@ -185,36 +247,44 @@ def download_range(name, date_from, date_to, log, should_stop, check_login=False
     if check_login:
         url = read_url()
         if "signin" in url.lower():
-            log(f"[{name}] ✗ 로그인 실패(로그인 화면으로 이동됨)")
-            return None
+            return ("signin", None)
     f = wait_new_file(before, should_stop)
-    if not f:
-        log(f"[{name}] ✗ 다운로드 실패(데이터 없음/타임아웃)")
-    return f
+    if f == "NODATA":
+        return ("nofile", None)   # 확장이 '조회결과 없음' 신호 → 빠르게 데이터없음
+    return ("file", f) if f else ("nofile", None)
 
 
 # ── 매입일자 기간조회 (기존 방식) ─────────────────────────
+def _target_dir(save_dir, safe, per_company_folder):
+    d = Path(save_dir) / safe if per_company_folder else Path(save_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def process(name, uid, pw, date_from, date_to, period, save_dir, log, should_stop,
-            sort_by_card=False):
+            sort_by_card=False, per_company_folder=False):
     do_login(name, uid, pw, log, should_stop)
-    f = download_range(name, date_from, date_to, log, should_stop, check_login=True)
-    if not f:
+    status, f = download_range(name, date_from, date_to, log, should_stop, check_login=True)
+    if status == "signin":
+        log(f"[{name}] ✗ 로그인 실패(로그인 화면으로 이동됨)")
         return False
+    if status == "nofile":
+        log(f"[{name}] · 조회결과 없음 (로그인 성공 · 해당 기간 데이터 없음)")
+        return "nofile"
     safe = sanitize(name)
-    save_dir = Path(save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
+    target = _target_dir(save_dir, safe, per_company_folder)
     if not sort_by_card:
-        dest = save_dir / f"{safe}_{period}{f.suffix}"
+        dest = target / f"{safe}_{period}{f.suffix}"
         if dest.exists():
             dest.unlink()
         f.replace(dest)
         log(f"[{name}] ✓ 저장: {dest.name}")
         return True
-    raw = save_dir / f"[원본]{safe}_{period}{f.suffix}"
+    raw = target / f"[원본]{safe}_{period}{f.suffix}"
     if raw.exists():
         raw.unlink()
     f.replace(raw)
-    proc = save_dir / f"[정리]{safe}_{period}.xlsx"
+    proc = target / f"[정리]{safe}_{period}.xlsx"
     try:
         import postprocess
         postprocess.process_file(raw, proc)
@@ -225,7 +295,8 @@ def process(name, uid, pw, date_from, date_to, period, save_dir, log, should_sto
 
 
 # ── 월조회 (거래일/승인일 기준 정리) ──────────────────────
-def process_monthly(name, uid, pw, year, month, save_dir, log, should_stop, next_days=5):
+def process_monthly(name, uid, pw, year, month, save_dir, log, should_stop, next_days=5,
+                    per_company_folder=False):
     import calendar
     last = calendar.monthrange(year, month)[1]
     r1f, r1t = f"{year:04d}{month:02d}01", f"{year:04d}{month:02d}{last:02d}"
@@ -234,29 +305,38 @@ def process_monthly(name, uid, pw, year, month, save_dir, log, should_stop, next
     period = f"{year:04d}-{month:02d}"
 
     do_login(name, uid, pw, log, should_stop)
-    f1 = download_range(name, r1f, r1t, log, should_stop, check_login=True)
-    if not f1:
+    s1, f1 = download_range(name, r1f, r1t, log, should_stop, check_login=True)
+    if s1 == "signin":
+        log(f"[{name}] ✗ 로그인 실패(로그인 화면으로 이동됨)")
         return False
-    f2 = download_range(name, r2f, r2t, log, should_stop, check_login=False)
-    if not f2:
-        return False
+    if s1 == "nofile":
+        log(f"[{name}] · 조회결과 없음 (로그인 성공 · {year}-{month:02d} 데이터 없음)")
+        return "nofile"
+    # 2구간(다음달 정산분)은 없을 수 있음 — 없으면 당월분만 사용
+    s2, f2 = download_range(name, r2f, r2t, log, should_stop, check_login=False)
 
     safe = sanitize(name)
-    save_dir = Path(save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-    raw1 = save_dir / f"[원본]{safe}_{period}_구간1{f1.suffix}"
-    raw2 = save_dir / f"[원본]{safe}_{period}_구간2{f2.suffix}"
-    for raw in (raw1, raw2):
-        if raw.exists():
-            raw.unlink()
+    target = _target_dir(save_dir, safe, per_company_folder)
+    raws = []
+    raw1 = target / f"[원본]{safe}_{period}_구간1{f1.suffix}"
+    if raw1.exists():
+        raw1.unlink()
     f1.replace(raw1)
-    f2.replace(raw2)
-    proc = save_dir / f"[정리]{safe}_{period}.xlsx"
+    raws.append(raw1)
+    if s2 == "file" and f2:
+        raw2 = target / f"[원본]{safe}_{period}_구간2{f2.suffix}"
+        if raw2.exists():
+            raw2.unlink()
+        f2.replace(raw2)
+        raws.append(raw2)
+    else:
+        log(f"[{name}] · 다음달 정산구간 데이터 없음 — 당월분만 정리")
+    proc = target / f"[정리]{safe}_{period}.xlsx"
     try:
         import postprocess
-        postprocess.process_monthly_files([raw1, raw2], filter_from=r1f, filter_to=r1t,
+        postprocess.process_monthly_files(raws, filter_from=r1f, filter_to=r1t,
                                           out=proc, label=period)
-        log(f"[{name}] ✓ 저장: {proc.name} + 원본 2구간")
+        log(f"[{name}] ✓ 저장: {proc.name} + 원본 {len(raws)}구간")
     except Exception as e:
         log(f"[{name}] ✓ 원본 저장됨 (정리본 생성 실패: {e})")
     return True
@@ -264,65 +344,82 @@ def process_monthly(name, uid, pw, year, month, save_dir, log, should_stop, next
 
 # ── 계정 순회(재시도 포함) 공통 ───────────────────────────
 def _run_accounts(accounts, do_account, log, should_stop, start_delay, retries):
-    ok, failed = 0, []
+    ok, nodata, failed = 0, [], []
     if start_delay:
-        log(f"{start_delay}초 후 시작 — 마우스/키보드 건드리지 마세요.")
+        log(f"{start_delay}초 안에 사용할 브라우저 창을 클릭해 앞에 두세요. (이후엔 건드리지 마세요)")
         for _ in range(start_delay * 2):
             if should_stop():
                 log("취소됨"); return
             time.sleep(0.5)
+    win = pick_browser()   # 사용할 브라우저 창 고정
+    log(f"사용 브라우저: {win.title[:40] if win else '못 찾음(브라우저를 열어두세요)'}")
+
     stopped = False
     for name, uid, pw in accounts:
         if should_stop():
             stopped = True; break
-        success = False
+        outcome = "fail"
         for attempt in range(retries + 1):
             if should_stop():
                 stopped = True; break
             if attempt > 0:
                 log(f"[{name}] ↻ 재시도 {attempt}/{retries} ...")
             try:
-                if do_account(name, uid, pw):
-                    success = True; break
+                r = do_account(name, uid, pw)
             except _Stop:
                 log("■ 즉시 중단됨 (현재 작업 취소)")
                 stopped = True; break
             except Exception as e:
                 log(f"[{name}] 오류: {e}")
+                r = False
+            if r is True:
+                outcome = "ok"; break
+            if r == "nofile":      # 로그인은 됨 · 데이터 없음 → 재시도 안 함
+                outcome = "nodata"; break
+            # r False → 로그인 실패 → 재시도
         if stopped:
             break
-        if success:
+        if outcome == "ok":
             ok += 1
+        elif outcome == "nodata":
+            nodata.append(name)
         else:
             failed.append(name)
             log(f"[{name}] ✗ 최종 실패 ({retries + 1}회 시도)")
-    log(f"━━ 완료: {ok}/{len(accounts)} 성공" + (f" · 실패: {', '.join(failed)}" if failed else ""))
+    summary = f"━━ 완료: {ok}/{len(accounts)} 성공"
+    if nodata:
+        summary += f" · 데이터없음: {', '.join(nodata)}"
+    if failed:
+        summary += f" · 실패: {', '.join(failed)}"
+    log(summary)
 
 
 def run_batch(accounts, date_from, date_to, save_dir=None, log=print,
-              should_stop=lambda: False, start_delay=5, retries=1, sort_by_card=False):
+              should_stop=lambda: False, start_delay=5, retries=1, sort_by_card=False,
+              per_company_folder=False):
     """매입일자 기간조회. accounts: [(name, id, pw), ...]."""
     period = period_label(date_from, date_to)
     sd = Path(save_dir) if save_dir else DOWNLOADS
     log(f"[매입일자 기간조회] 총 {len(accounts)}건, 매입 {digits(date_from)}~{digits(date_to)}")
-    log(f"저장 폴더: {sd}")
+    log(f"저장 폴더: {sd}" + ("  (업체명별 하위폴더)" if per_company_folder else ""))
     _run_accounts(
         accounts,
         lambda n, u, p: process(n, u, p, date_from, date_to, period, sd, log, should_stop,
-                                sort_by_card=sort_by_card),
+                                sort_by_card=sort_by_card, per_company_folder=per_company_folder),
         log, should_stop, start_delay, retries)
 
 
 def run_batch_monthly(accounts, year, month, next_days=5, save_dir=None, log=print,
-                      should_stop=lambda: False, start_delay=5, retries=1):
+                      should_stop=lambda: False, start_delay=5, retries=1,
+                      per_company_folder=False):
     """월조회(거래일 기준). 계정당 2구간 조회 → 합쳐 거래일 필터 → 카드사별 정리."""
     sd = Path(save_dir) if save_dir else DOWNLOADS
     log(f"[월조회·거래일 기준] 총 {len(accounts)}건, {year}-{month:02d} (다음달 {next_days}일까지)")
-    log(f"저장 폴더: {sd}")
+    log(f"저장 폴더: {sd}" + ("  (업체명별 하위폴더)" if per_company_folder else ""))
     _run_accounts(
         accounts,
         lambda n, u, p: process_monthly(n, u, p, year, month, sd, log, should_stop,
-                                        next_days=next_days),
+                                        next_days=next_days, per_company_folder=per_company_folder),
         log, should_stop, start_delay, retries)
 
 

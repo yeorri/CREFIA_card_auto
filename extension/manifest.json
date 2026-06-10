@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "카드매입자료 자동 다운로드",
-  "version": "0.7.2",
+  "version": "0.8.2",
   "description": "여신금융협회(cardsales.or.kr) 카드 매입내역 엑셀 자동 다운로드 도우미",
   "content_scripts": [
     {

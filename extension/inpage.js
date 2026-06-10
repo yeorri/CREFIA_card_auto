@@ -80,8 +80,17 @@
     if (!$) return;
 
     if (job.stage === "await_summary") {
-      waitFor(summaryRows, function (ok) {
-        if (!ok) { log("✗ 요약 결과가 없습니다 (해당 기간 데이터 없음일 수 있음)"); clearJob(); return; }
+      // 행이 뜨거나, "조회된 결과가 없습니다"가 보이면 판단 (둘 중 빠른 쪽)
+      waitFor(function () {
+        return summaryRows() > 0 || /조회된 결과가 없습니다/.test(document.body.innerText || "");
+      }, function (ok) {
+        if (summaryRows() === 0) {
+          log("✗ 조회결과 없음 (해당 기간 데이터 없음)");
+          // Python에 '데이터없음' 신호: 창 제목을 바꾼다(Python이 창 제목으로 감지 — 다운로드·주소창 안 건드림)
+          try { document.title = "CSNODATA"; } catch (e) {}
+          clearJob();
+          return;
+        }
         log("② 요약 " + summaryRows() + "행 로드됨");
         // 전체 체크
         const head = document.querySelector(".table_cell_header input[type=checkbox]")

@@ -96,8 +96,8 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title("여신금융협회 카드자료 자동 다운로드")
-        root.geometry("1020x800")
-        root.minsize(960, 780)
+        root.geometry("1020x860")
+        root.minsize(960, 840)
         root.configure(bg=BG)
         try:
             ico = resource_path("icon.ico")
@@ -246,6 +246,12 @@ class App:
                                 padx=8, pady=4)
         self.lbl_dir.pack(side="left", fill="x", expand=True, padx=(0, 8))
         button(r2, "변경", self.pick_dir, "ghost").pack(side="left")
+        r4 = tk.Frame(c3, bg=CARD); r4.pack(fill="x", pady=(8, 0))
+        self.var_folder = tk.BooleanVar(value=False)
+        tk.Checkbutton(r4, text="업체명별 하위폴더 만들어 저장  (저장폴더/업체명/…)",
+                       variable=self.var_folder, bg=CARD, fg=INK, activebackground=CARD,
+                       activeforeground=INK, selectcolor="#FFFFFF", highlightthickness=0,
+                       font=(FONT, 9), anchor="w", cursor="hand2").pack(anchor="w")
         self._update_mode()
 
         # 실행
@@ -402,12 +408,14 @@ class App:
             if (d2 - d1).days + 1 > 31:
                 messagebox.showwarning("기간", f"조회 가능 기간은 최대 31일입니다.\n현재 {(d2 - d1).days + 1}일."); return
             sort_by_card = self.var_sort.get()
+            per_folder = self.var_folder.get()
             desc = f"매입일자 {df}~{dt}"
 
             def job():
                 orchestrate.run_batch(accounts, df, dt, save_dir=self.save_dir,
                                       log=self._log, should_stop=lambda: self.stop_flag,
-                                      start_delay=5, sort_by_card=sort_by_card)
+                                      start_delay=5, sort_by_card=sort_by_card,
+                                      per_company_folder=per_folder)
         else:
             # 월 조회 (거래일 기준)
             ys = "".join(c for c in self.e_year.get() if c.isdigit())
@@ -418,18 +426,21 @@ class App:
             if not (1 <= int(nds) <= 28):
                 messagebox.showwarning("월조회", "'다음달 N일'은 1~28 사이로 입력하세요."); return
             year, month, nextdays = int(ys), int(ms), int(nds)
+            per_folder = self.var_folder.get()
             desc = f"{year}년 {month}월 (거래일 기준, 다음달 {nextdays}일까지)"
 
             def job():
                 orchestrate.run_batch_monthly(accounts, year, month, next_days=nextdays,
                                               save_dir=self.save_dir, log=self._log,
-                                              should_stop=lambda: self.stop_flag, start_delay=5)
+                                              should_stop=lambda: self.stop_flag, start_delay=5,
+                                              per_company_folder=per_folder)
 
         if not messagebox.askokcancel(
                 "확인",
                 f"{len(accounts)}건 · {desc}\n\n"
-                "· 약 5초 후 Chrome을 자동 조작하니 마우스/키보드를 건드리지 마세요.\n"
-                "· Chrome(확장 설치) 1개 열어둠 + 영문 입력 상태인지 확인하세요."):
+                "· 시작 후 5초 안에 사용할 브라우저(크롬/웨일) 창을 클릭해 앞에 두세요.\n"
+                "· 그 다음부터는 마우스/키보드를 건드리지 마세요.\n"
+                "· 브라우저(확장 설치) 1개 열어둠 + 영문 입력 상태 확인."):
             return
         self.stop_flag = False
         self.btn_run.config(state="disabled")

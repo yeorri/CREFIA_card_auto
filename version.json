@@ -1,5 +1,5 @@
 {
-  "version": "1.0.1",
+  "version": "1.0.2",
   "download_url": "https://github.com/yeorri/CREFIA_card_auto/releases/latest",
-  "notes": "네이버 웨일·Edge 브라우저 지원 추가"
+  "notes": "데이터 없는 거래처 빠른 처리 · 업체명별 폴더 저장 옵션 · 브라우저 창 고정(웨일/크롬 혼선 방지) · 안정성 개선"
 }
