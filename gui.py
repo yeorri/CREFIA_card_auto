@@ -12,12 +12,14 @@ import queue
 import sys
 import threading
 import tkinter as tk
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import orchestrate  # noqa: E402
+import updater  # noqa: E402
 
 
 def resource_path(name):
@@ -111,6 +113,19 @@ class App:
         self._style()
         self._build()
         self._poll_log()
+        # 시작 1.5초 후 업데이트 확인 (네트워크 실패는 조용히 무시)
+        self.root.after(1500, lambda: updater.check_async(self._on_update))
+
+    def _on_update(self, info):
+        self.root.after(0, lambda: self._show_update(info))
+
+    def _show_update(self, info):
+        msg = (f"새 버전 v{info['latest']} 이(가) 있습니다.  (현재 v{info['current']})\n\n"
+               f"{info.get('notes', '')}\n\n다운로드 페이지를 열까요?")
+        if messagebox.askyesno("업데이트 확인", msg):
+            url = info.get("download_url") or \
+                "https://github.com/yeorri/CREFIA_card_auto/releases/latest"
+            webbrowser.open(url)
 
     def _style(self):
         st = ttk.Style()
@@ -132,7 +147,7 @@ class App:
         head.pack_propagate(False)
         tk.Label(head, text="여신금융협회 카드자료 자동 다운로드", bg=HEAD, fg="#FFFFFF",
                  font=(FONT, 14, "bold")).pack(anchor="w", padx=18, pady=(11, 0))
-        tk.Label(head, text="여신금융협회 가맹점 매입내역 · 다중 거래처 일괄 저장",
+        tk.Label(head, text=f"여신금융협회 가맹점 매입내역 · 다중 거래처 일괄 저장   v{updater.CURRENT_VERSION}",
                  bg=HEAD, fg="#94A3B8", font=(FONT, 8)).pack(anchor="w", padx=18)
 
         body = tk.Frame(self.root, bg=BG)
