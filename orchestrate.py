@@ -11,11 +11,19 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import os
 import re
+import shutil
 import sys
 import time
 import urllib.parse
 from pathlib import Path
+
+try:
+    import winreg
+except Exception:
+    winreg = None
 
 import pyautogui
 import pyperclip
@@ -33,7 +41,49 @@ pyautogui.FAILSAFE = False
 SIGNIN = "https://www.cardsales.or.kr/signin"
 SIGNOUT = "https://www.cardsales.or.kr/signout"
 PURCHASE = "https://www.cardsales.or.kr/page/purchase/term"
-DOWNLOADS = Path.home() / "Downloads"
+def _known_downloads():
+    """Windows 레지스트리에서 '실제' Downloads 폴더 경로를 읽는다(OneDrive 리디렉션 반영).
+
+    Path.home()/Downloads 는 OneDrive로 리디렉션된 환경(바탕화면/다운로드가 OneDrive 밑으로
+    옮겨진 PC)에서 실제 다운로드 위치와 어긋난다. Known Folder GUID로 진짜 경로를 가져온다."""
+    try:
+        import winreg
+        guid = "{374DE290-123F-4565-9164-39C4925E467B}"  # Downloads Known Folder
+        key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+            val, _ = winreg.QueryValueEx(k, guid)
+            if val:
+                return Path(os.path.expandvars(val))
+    except Exception:
+        pass
+    return None
+
+
+def _build_download_dirs():
+    """브라우저가 파일을 떨어뜨릴 수 있는 후보 폴더들(중복 제거, 순서=우선순위)."""
+    dirs = []
+
+    def add(p):
+        if not p:
+            return
+        p = Path(p)
+        if p not in dirs:
+            dirs.append(p)
+
+    add(_known_downloads())                       # 레지스트리(리디렉션 반영) — 가장 정확
+    add(Path.home() / "Downloads")                # 표준 위치
+    add(Path.home() / "OneDrive" / "Downloads")   # OneDrive 리디렉션 흔한 위치
+    for env in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        v = os.environ.get(env)
+        if v:
+            add(Path(v) / "Downloads")
+    return dirs
+
+
+# 감시할 후보 다운로드 폴더 전체(OneDrive/커스텀 환경 무관하게 잡기 위함)
+DOWNLOAD_DIRS = _build_download_dirs()
+# 단일 기본값(저장 폴더 미지정 시 저장 위치 등): 레지스트리 우선, 없으면 표준
+DOWNLOADS = DOWNLOAD_DIRS[0] if DOWNLOAD_DIRS else (Path.home() / "Downloads")
 
 DP_WAIT = 2.5
 DL_TIMEOUT = 15   # 자료 있으면 보통 3~10초 내 다운. 데이터없음은 확장 신호로 더 빨리 잡음.
@@ -183,9 +233,29 @@ def _nap(seconds, should_stop):
 
 def snapshot_downloads():
     out = set()
-    for pat in DL_EXTS:
-        out |= set(DOWNLOADS.glob(pat))
+    for d in DOWNLOAD_DIRS:
+        if not d.exists():
+            continue
+        for pat in DL_EXTS:
+            try:
+                out |= set(d.glob(pat))
+            except Exception:
+                pass
     return out
+
+
+def _downloading_now():
+    """진행 중인 다운로드(.crdownload/.tmp)가 후보 폴더 어디에든 있으면 True."""
+    parts = []
+    for d in DOWNLOAD_DIRS:
+        if not d.exists():
+            continue
+        for pat in ("*.crdownload", "*.tmp"):
+            try:
+                parts += list(d.glob(pat))
+            except Exception:
+                pass
+    return parts
 
 
 def _browser_title():
@@ -211,7 +281,7 @@ def wait_new_file(before, should_stop, timeout=DL_TIMEOUT):
         if should_stop():
             raise _Stop()
         # ① 파일 먼저 확인 — 파일이 있으면 신호와 무관하게 무조건 사용(이중 안전장치)
-        downloading = list(DOWNLOADS.glob("*.crdownload"))
+        downloading = _downloading_now()
         new = [f for f in snapshot_downloads() if f not in before]
         if new and not downloading:
             f = max(new, key=lambda p: p.stat().st_mtime)
@@ -377,6 +447,7 @@ def _run_accounts(accounts, do_account, log, should_stop, start_delay, retries):
             time.sleep(0.5)
     win = pick_browser()   # 사용할 브라우저 창 고정
     log(f"사용 브라우저: {win.title[:40] if win else '못 찾음(브라우저를 열어두세요)'}")
+    log("다운로드 감시 폴더: " + " | ".join(str(d) for d in DOWNLOAD_DIRS))
 
     stopped = False
     for name, uid, pw in accounts:

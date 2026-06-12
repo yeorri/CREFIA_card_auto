@@ -1,5 +1,5 @@
 {
-  "version": "1.0.4",
+  "version": "1.0.5",
   "download_url": "https://github.com/yeorri/CREFIA_card_auto/releases/latest",
-  "notes": "월조회 1·2구간 모두 조회(누락 방지) · 실행 결과 리포트 엑셀 · 느린 PC 안정화(데이터없음 판정 3초 유예) · 업체명별 폴더. ※확장도 0.8.3으로 교체 필요"
+  "notes": "다운로드 폴더 자동감지(OneDrive 리디렉션 대응) · 여러 후보 폴더 동시 감시 · 시작 로그에 감시 폴더 표시. ※확장 교체 불필요(0.8.3 그대로)"
 }
