@@ -103,6 +103,15 @@ def write_report(out, title_rows, header, data, original_rows):
     return out
 
 
+def read_detail(src):
+    """원본 .xls의 헤더 + 세부내역 데이터행만 반환(정렬 안 함). 합본용."""
+    rows = read_xls_rows(src)
+    hi = find_header(rows)
+    header = rows[hi]
+    data = [r for r in rows[hi + 1:] if str(r[0]).strip() != ""]
+    return header, data
+
+
 def process_file(src, out=None):
     src = Path(src)
     if out is None:
@@ -112,7 +121,8 @@ def process_file(src, out=None):
     header = rows[hi]
     title_rows = rows[:hi]
     data = [r for r in rows[hi + 1:] if str(r[0]).strip() != ""]
-    return write_report(out, title_rows, header, data, rows)
+    write_report(out, title_rows, header, data, rows)
+    return header, data
 
 
 def process_monthly_files(srcs, filter_from, filter_to, out, label=""):
@@ -140,7 +150,44 @@ def process_monthly_files(srcs, filter_from, filter_to, out, label=""):
         ["건수", str(len(merged)), "합계", f"{int(total_amt):,}"],
     ]
     original_rows = [header] + merged
-    return write_report(out, title_rows, header, merged, original_rows)
+    write_report(out, title_rows, header, merged, original_rows)
+    return header, merged
+
+
+RESULT_FILL = {
+    "성공": PatternFill("solid", fgColor="DCFCE7"),
+    "조회없음": PatternFill("solid", fgColor="FEF9C3"),
+    "로그인실패": PatternFill("solid", fgColor="FEE2E2"),
+    "실패": PatternFill("solid", fgColor="FECACA"),
+}
+
+
+def build_results_report(results, out):
+    """실행 결과 리포트. results: [(업체명, 결과라벨, 상세), ...].
+    한 시트에 업체명/결과/상세, 결과는 색으로 구분."""
+    out = Path(out)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "실행결과"
+    ws.append(["업체명", "결과", "상세"])
+    for c in range(1, 4):
+        ws.cell(1, c).font = BOLD
+        ws.cell(1, c).fill = HEAD_FILL
+    r = 2
+    for (name, label, detail) in results:
+        ws.cell(r, 1, name)
+        cell = ws.cell(r, 2, label)
+        cell.fill = RESULT_FILL.get(label, RESULT_FILL["실패"])
+        cell.font = BOLD
+        cell.alignment = Alignment(horizontal="center")
+        ws.cell(r, 3, detail)
+        r += 1
+    ws.column_dimensions["A"].width = 24
+    ws.column_dimensions["B"].width = 12
+    ws.column_dimensions["C"].width = 50
+    ws.freeze_panes = "A2"
+    wb.save(out)
+    return out
 
 
 if __name__ == "__main__":

@@ -210,14 +210,16 @@ def wait_new_file(before, should_stop, timeout=DL_TIMEOUT):
     while time.time() < deadline:
         if should_stop():
             raise _Stop()
-        if "CSNODATA" in _browser_title():   # 데이터없음 신호(창 제목)
-            return "NODATA"
+        # ① 파일 먼저 확인 — 파일이 있으면 신호와 무관하게 무조건 사용(이중 안전장치)
         downloading = list(DOWNLOADS.glob("*.crdownload"))
         new = [f for f in snapshot_downloads() if f not in before]
         if new and not downloading:
             f = max(new, key=lambda p: p.stat().st_mtime)
             time.sleep(0.6)
             return f
+        # ② 그 다음에 데이터없음 신호(창 제목) 확인
+        if "CSNODATA" in _browser_title():
+            return "NODATA"
         time.sleep(0.4)
     return None
 
@@ -271,14 +273,16 @@ def _target_dir(save_dir, safe, per_company_folder):
 
 def process(name, uid, pw, date_from, date_to, period, save_dir, log, should_stop,
             sort_by_card=False, per_company_folder=False):
+    """반환: (status, detail). status ∈ ok/nodata/login_fail."""
+    import postprocess
     do_login(name, uid, pw, log, should_stop)
     status, f = download_range(name, date_from, date_to, log, should_stop, check_login=True)
     if status == "signin":
         log(f"[{name}] ✗ 로그인 실패(로그인 화면으로 이동됨)")
-        return False
+        return ("login_fail", "로그인 실패 (비밀번호 오류/조작 등)")
     if status == "nofile":
         log(f"[{name}] · 조회결과 없음 (로그인 성공 · 해당 기간 데이터 없음)")
-        return "nofile"
+        return ("nodata", "조회결과 없음 (데이터 없음)")
     safe = sanitize(name)
     target = _target_dir(save_dir, safe, per_company_folder)
     if not sort_by_card:
@@ -287,25 +291,27 @@ def process(name, uid, pw, date_from, date_to, period, save_dir, log, should_sto
             dest.unlink()
         f.replace(dest)
         log(f"[{name}] ✓ 저장: {dest.name}")
-        return True
+        return ("ok", f"저장: {dest.name}")
     raw = target / f"[원본]{safe}_{period}{f.suffix}"
     if raw.exists():
         raw.unlink()
     f.replace(raw)
     proc = target / f"[정리]{safe}_{period}.xlsx"
     try:
-        import postprocess
         postprocess.process_file(raw, proc)
         log(f"[{name}] ✓ 저장: {raw.name} + {proc.name}")
+        return ("ok", f"저장: {proc.name} (+원본)")
     except Exception as e:
         log(f"[{name}] ✓ 저장: {raw.name} (정리본 생성 실패: {e})")
-    return True
+        return ("ok", f"저장: {raw.name} (정리 실패)")
 
 
 # ── 월조회 (거래일/승인일 기준 정리) ──────────────────────
 def process_monthly(name, uid, pw, year, month, save_dir, log, should_stop, next_days=5,
                     per_company_folder=False):
+    """반환: (status, detail). status ∈ ok/nodata/login_fail."""
     import calendar
+    import postprocess
     last = calendar.monthrange(year, month)[1]
     r1f, r1t = f"{year:04d}{month:02d}01", f"{year:04d}{month:02d}{last:02d}"
     ny, nm = (year + 1, 1) if month == 12 else (year, month + 1)
@@ -313,51 +319,61 @@ def process_monthly(name, uid, pw, year, month, save_dir, log, should_stop, next
     period = f"{year:04d}-{month:02d}"
 
     do_login(name, uid, pw, log, should_stop)
+    # 1구간(매입 당월)
     s1, f1 = download_range(name, r1f, r1t, log, should_stop, check_login=True)
     if s1 == "signin":
         log(f"[{name}] ✗ 로그인 실패(로그인 화면으로 이동됨)")
-        return False
-    if s1 == "nofile":
-        log(f"[{name}] · 조회결과 없음 (로그인 성공 · {year}-{month:02d} 데이터 없음)")
-        return "nofile"
-    # 2구간(다음달 정산분)은 없을 수 있음 — 없으면 당월분만 사용
+        return ("login_fail", "로그인 실패 (비밀번호 오류/조작 등)")
+    # ★ 1구간이 비어도 2구간은 반드시 검색한다 (월말 거래가 다음달 초 매입으로만 잡힐 수 있음)
     s2, f2 = download_range(name, r2f, r2t, log, should_stop, check_login=False)
+
+    # 두 구간 다 비면 진짜 데이터 없음
+    if s1 != "file" and s2 != "file":
+        log(f"[{name}] · 조회결과 없음 (1·2구간 모두 데이터 없음)")
+        return ("nodata", "조회결과 없음 (1·2구간 모두 없음)")
 
     safe = sanitize(name)
     target = _target_dir(save_dir, safe, per_company_folder)
     raws = []
-    raw1 = target / f"[원본]{safe}_{period}_구간1{f1.suffix}"
-    if raw1.exists():
-        raw1.unlink()
-    f1.replace(raw1)
-    raws.append(raw1)
+    if s1 == "file" and f1:
+        raw1 = target / f"[원본]{safe}_{period}_구간1{f1.suffix}"
+        if raw1.exists():
+            raw1.unlink()
+        f1.replace(raw1)
+        raws.append(raw1)
+    else:
+        log(f"[{name}] · 당월 매입구간 비어있음 — 다음달 정산분(2구간)만으로 정리")
     if s2 == "file" and f2:
         raw2 = target / f"[원본]{safe}_{period}_구간2{f2.suffix}"
         if raw2.exists():
             raw2.unlink()
         f2.replace(raw2)
         raws.append(raw2)
-    else:
-        log(f"[{name}] · 다음달 정산구간 데이터 없음 — 당월분만 정리")
+
+    seg = f"1구간 {'O' if s1 == 'file' else 'X'} · 2구간 {'O' if s2 == 'file' else 'X'}"
     proc = target / f"[정리]{safe}_{period}.xlsx"
     try:
-        import postprocess
         postprocess.process_monthly_files(raws, filter_from=r1f, filter_to=r1t,
                                           out=proc, label=period)
         log(f"[{name}] ✓ 저장: {proc.name} + 원본 {len(raws)}구간")
+        return ("ok", f"{seg} → 저장: {proc.name}")
     except Exception as e:
         log(f"[{name}] ✓ 원본 저장됨 (정리본 생성 실패: {e})")
-    return True
+        return ("ok", f"{seg} → 원본 저장 (정리 실패)")
 
 
 # ── 계정 순회(재시도 포함) 공통 ───────────────────────────
+_LABEL = {"ok": "성공", "nodata": "조회없음", "login_fail": "로그인실패", "error": "실패"}
+
+
 def _run_accounts(accounts, do_account, log, should_stop, start_delay, retries):
-    ok, nodata, failed = 0, [], []
+    """각 계정 처리 + 재시도. 반환: results = [(업체명, 결과라벨, 상세), ...]."""
+    results = []
     if start_delay:
         log(f"{start_delay}초 안에 사용할 브라우저 창을 클릭해 앞에 두세요. (이후엔 건드리지 마세요)")
         for _ in range(start_delay * 2):
             if should_stop():
-                log("취소됨"); return
+                log("취소됨"); return results
             time.sleep(0.5)
     win = pick_browser()   # 사용할 브라우저 창 고정
     log(f"사용 브라우저: {win.title[:40] if win else '못 찾음(브라우저를 열어두세요)'}")
@@ -366,69 +382,88 @@ def _run_accounts(accounts, do_account, log, should_stop, start_delay, retries):
     for name, uid, pw in accounts:
         if should_stop():
             stopped = True; break
-        outcome = "fail"
+        status, detail = "error", "미실행"
         for attempt in range(retries + 1):
             if should_stop():
                 stopped = True; break
             if attempt > 0:
                 log(f"[{name}] ↻ 재시도 {attempt}/{retries} ...")
             try:
-                r = do_account(name, uid, pw)
+                status, detail = do_account(name, uid, pw)
             except _Stop:
                 log("■ 즉시 중단됨 (현재 작업 취소)")
                 stopped = True; break
             except Exception as e:
+                status, detail = "error", str(e)
                 log(f"[{name}] 오류: {e}")
-                r = False
-            if r is True:
-                outcome = "ok"; break
-            if r == "nofile":      # 로그인은 됨 · 데이터 없음 → 재시도 안 함
-                outcome = "nodata"; break
-            # r False → 로그인 실패 → 재시도
+            if status in ("ok", "nodata"):   # 성공/데이터없음 → 재시도 안 함
+                break
+            # login_fail / error → 재시도
         if stopped:
             break
-        if outcome == "ok":
-            ok += 1
-        elif outcome == "nodata":
-            nodata.append(name)
-        else:
-            failed.append(name)
-            log(f"[{name}] ✗ 최종 실패 ({retries + 1}회 시도)")
-    summary = f"━━ 완료: {ok}/{len(accounts)} 성공"
-    if nodata:
-        summary += f" · 데이터없음: {', '.join(nodata)}"
-    if failed:
-        summary += f" · 실패: {', '.join(failed)}"
+        label = _LABEL.get(status, "실패")
+        if status not in ("ok", "nodata"):
+            log(f"[{name}] ✗ 최종 {label} ({retries + 1}회 시도)")
+        results.append((name, label, detail))
+
+    ok = sum(1 for r in results if r[1] == "성공")
+    summary = f"━━ 완료: {ok}/{len(results)} 성공"
+    for lab in ("조회없음", "로그인실패", "실패"):
+        names = [r[0] for r in results if r[1] == lab]
+        if names:
+            summary += f" · {lab}: {', '.join(names)}"
     log(summary)
+    return results
+
+
+def _write_results_report(results, save_dir, period, log):
+    """실행 결과 리포트 엑셀(업체명/결과/상세)을 저장폴더에 저장."""
+    if not results:
+        return
+    try:
+        import postprocess
+        out = Path(save_dir) / f"[결과]실행리포트_{period}.xlsx"
+        if out.exists():
+            out.unlink()
+        postprocess.build_results_report(results, out)
+        ok = sum(1 for r in results if r[1] == "성공")
+        log(f"★ 결과 리포트 저장: {out.name}  ({ok}/{len(results)} 성공)")
+    except Exception as e:
+        log(f"결과 리포트 생성 실패: {e}")
 
 
 def run_batch(accounts, date_from, date_to, save_dir=None, log=print,
               should_stop=lambda: False, start_delay=5, retries=1, sort_by_card=False,
-              per_company_folder=False):
+              per_company_folder=False, consolidate=False):
     """매입일자 기간조회. accounts: [(name, id, pw), ...]."""
     period = period_label(date_from, date_to)
     sd = Path(save_dir) if save_dir else DOWNLOADS
     log(f"[매입일자 기간조회] 총 {len(accounts)}건, 매입 {digits(date_from)}~{digits(date_to)}")
     log(f"저장 폴더: {sd}" + ("  (업체명별 하위폴더)" if per_company_folder else ""))
-    _run_accounts(
+    results = _run_accounts(
         accounts,
         lambda n, u, p: process(n, u, p, date_from, date_to, period, sd, log, should_stop,
                                 sort_by_card=sort_by_card, per_company_folder=per_company_folder),
         log, should_stop, start_delay, retries)
+    if consolidate:
+        _write_results_report(results, sd, period, log)
 
 
 def run_batch_monthly(accounts, year, month, next_days=5, save_dir=None, log=print,
                       should_stop=lambda: False, start_delay=5, retries=1,
-                      per_company_folder=False):
+                      per_company_folder=False, consolidate=False):
     """월조회(거래일 기준). 계정당 2구간 조회 → 합쳐 거래일 필터 → 카드사별 정리."""
     sd = Path(save_dir) if save_dir else DOWNLOADS
+    period = f"{year:04d}-{month:02d}"
     log(f"[월조회·거래일 기준] 총 {len(accounts)}건, {year}-{month:02d} (다음달 {next_days}일까지)")
     log(f"저장 폴더: {sd}" + ("  (업체명별 하위폴더)" if per_company_folder else ""))
-    _run_accounts(
+    results = _run_accounts(
         accounts,
         lambda n, u, p: process_monthly(n, u, p, year, month, sd, log, should_stop,
                                         next_days=next_days, per_company_folder=per_company_folder),
         log, should_stop, start_delay, retries)
+    if consolidate:
+        _write_results_report(results, sd, period, log)
 
 
 def _load_csv():

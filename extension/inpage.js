@@ -80,13 +80,12 @@
     if (!$) return;
 
     if (job.stage === "await_summary") {
-      // 행이 뜨거나, "조회된 결과가 없습니다"가 보이면 판단 (둘 중 빠른 쪽)
-      waitFor(function () {
-        return summaryRows() > 0 || /조회된 결과가 없습니다/.test(document.body.innerText || "");
-      }, function (ok) {
-        if (summaryRows() === 0) {
+      // 요약 행을 약 3초(12×250ms)까지 기다린다. 느린 PC의 렌더 지연 대비.
+      // 3초 안에 행이 뜨면 데이터 있음, 끝까지 0이면 데이터 없음.
+      waitFor(summaryRows, function (ok) {
+        if (!ok) {
           log("✗ 조회결과 없음 (해당 기간 데이터 없음)");
-          // Python에 '데이터없음' 신호: 창 제목을 바꾼다(Python이 창 제목으로 감지 — 다운로드·주소창 안 건드림)
+          // Python에 '데이터없음' 신호: 창 제목을 바꾼다(다운로드·주소창 안 건드림)
           try { document.title = "CSNODATA"; } catch (e) {}
           clearJob();
           return;
@@ -108,7 +107,7 @@
           log("④ 상세조회 클릭 — 상세내역 대기...");
           setTimeout(resume, 1800); // ajax 경우 대비
         }, 500);
-      }, { tries: 40 });
+      }, { tries: 12 });   // ≈3초 유예
     } else if (job.stage === "await_detail") {
       // 상세 데이터가 채워질 시간을 준 뒤 상세 엑셀 호출
       waitFor(function () { return typeof window.goSubExcelPrint === "function"; }, function (ok) {

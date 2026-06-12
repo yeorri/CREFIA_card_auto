@@ -248,10 +248,15 @@ class App:
         button(r2, "변경", self.pick_dir, "ghost").pack(side="left")
         r4 = tk.Frame(c3, bg=CARD); r4.pack(fill="x", pady=(8, 0))
         self.var_folder = tk.BooleanVar(value=False)
-        tk.Checkbutton(r4, text="업체명별 하위폴더 만들어 저장  (저장폴더/업체명/…)",
+        self.var_consol = tk.BooleanVar(value=True)
+        tk.Checkbutton(r4, text="업체명별 하위폴더",
                        variable=self.var_folder, bg=CARD, fg=INK, activebackground=CARD,
                        activeforeground=INK, selectcolor="#FFFFFF", highlightthickness=0,
-                       font=(FONT, 9), anchor="w", cursor="hand2").pack(anchor="w")
+                       font=(FONT, 9), anchor="w", cursor="hand2").pack(side="left", padx=(0, 16))
+        tk.Checkbutton(r4, text="실행 결과 리포트 생성  ([결과]실행리포트_기간.xlsx)",
+                       variable=self.var_consol, bg=CARD, fg=INK, activebackground=CARD,
+                       activeforeground=INK, selectcolor="#FFFFFF", highlightthickness=0,
+                       font=(FONT, 9), anchor="w", cursor="hand2").pack(side="left")
         self._update_mode()
 
         # 실행
@@ -409,13 +414,14 @@ class App:
                 messagebox.showwarning("기간", f"조회 가능 기간은 최대 31일입니다.\n현재 {(d2 - d1).days + 1}일."); return
             sort_by_card = self.var_sort.get()
             per_folder = self.var_folder.get()
+            consol = self.var_consol.get()
             desc = f"매입일자 {df}~{dt}"
 
             def job():
                 orchestrate.run_batch(accounts, df, dt, save_dir=self.save_dir,
                                       log=self._log, should_stop=lambda: self.stop_flag,
                                       start_delay=5, sort_by_card=sort_by_card,
-                                      per_company_folder=per_folder)
+                                      per_company_folder=per_folder, consolidate=consol)
         else:
             # 월 조회 (거래일 기준)
             ys = "".join(c for c in self.e_year.get() if c.isdigit())
@@ -427,13 +433,14 @@ class App:
                 messagebox.showwarning("월조회", "'다음달 N일'은 1~28 사이로 입력하세요."); return
             year, month, nextdays = int(ys), int(ms), int(nds)
             per_folder = self.var_folder.get()
+            consol = self.var_consol.get()
             desc = f"{year}년 {month}월 (거래일 기준, 다음달 {nextdays}일까지)"
 
             def job():
                 orchestrate.run_batch_monthly(accounts, year, month, next_days=nextdays,
                                               save_dir=self.save_dir, log=self._log,
                                               should_stop=lambda: self.stop_flag, start_delay=5,
-                                              per_company_folder=per_folder)
+                                              per_company_folder=per_folder, consolidate=consol)
 
         if not messagebox.askokcancel(
                 "확인",
