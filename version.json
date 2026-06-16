@@ -1,5 +1,5 @@
 {
-  "version": "1.0.5",
+  "version": "1.0.6",
   "download_url": "https://github.com/yeorri/CREFIA_card_auto/releases/latest",
-  "notes": "다운로드 폴더 자동감지(OneDrive 리디렉션 대응) · 여러 후보 폴더 동시 감시 · 시작 로그에 감시 폴더 표시. ※확장 교체 불필요(0.8.3 그대로)"
+  "notes": "[정리] 파일 맨 위(헤더 아래)에 월 총합계 행 추가 — 카드사 소계 합산(더블카운트 없음). ※확장 교체 불필요(0.8.3 그대로)"
 }

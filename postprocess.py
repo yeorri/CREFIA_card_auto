@@ -23,6 +23,7 @@ SUM_COLS = [8, 9, 10, 12, 13, 14, 15]     # 합계 낼 금액 열들 (수수료�
 
 HEAD_FILL = PatternFill("solid", fgColor="E2E8F0")
 SUB_FILL = PatternFill("solid", fgColor="FFF3C4")
+GRAND_FILL = PatternFill("solid", fgColor="BFDBFE")   # 총합계 행(헤더 아래) 강조
 BOLD = Font(bold=True)
 RIGHT = Alignment(horizontal="right")
 
@@ -63,9 +64,12 @@ def write_report(out, title_rows, header, data, original_rows):
         cell.font = BOLD
         cell.fill = HEAD_FILL
     out_r += 1
+    grand_row = out_r            # 총합계 행 자리 예약(헤더 바로 아래) — 수식은 아래에서 채움
+    out_r += 1
     first_data_row = out_r
 
     data = sorted(data, key=lambda r: str(r[CARD_COL]))
+    subtotal_rows = []           # 카드사별 소계행 번호(총합계가 이것들만 더해 더블카운트 방지)
     i = 0
     while i < len(data):
         card = str(data[i][CARD_COL])
@@ -84,10 +88,24 @@ def write_report(out, title_rows, header, data, original_rows):
         for col0 in SUM_COLS:
             L = get_column_letter(col0 + 1)
             ws.cell(out_r, col0 + 1).value = f"=SUM({L}{start}:{L}{end})"
+        subtotal_rows.append(out_r)
         out_r += 1
 
+    # ── 총합계 행(헤더 바로 아래) 채우기 ──
+    for c in range(ncol):
+        ws.cell(grand_row, c + 1).fill = GRAND_FILL
+        ws.cell(grand_row, c + 1).font = BOLD
+    ws.cell(grand_row, CARD_COL + 1, "총합계")
+    for col0 in SUM_COLS:
+        L = get_column_letter(col0 + 1)
+        if subtotal_rows:        # 카드사 소계 셀들만 더함(원본 행을 더하면 소계와 중복)
+            refs = ",".join(f"{L}{r}" for r in subtotal_rows)
+            ws.cell(grand_row, col0 + 1).value = f"=SUM({refs})"
+        else:
+            ws.cell(grand_row, col0 + 1).value = 0
+
     for col0 in SUM_COLS + [11]:
-        for rr in range(first_data_row, out_r):
+        for rr in range(grand_row, out_r):
             ws.cell(rr, col0 + 1).number_format = "#,##0"
             ws.cell(rr, col0 + 1).alignment = RIGHT
 
