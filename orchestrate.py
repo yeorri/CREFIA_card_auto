@@ -244,18 +244,18 @@ def snapshot_downloads():
     return out
 
 
-def _downloading_now():
-    """진행 중인 다운로드(.crdownload/.tmp)가 후보 폴더 어디에든 있으면 True."""
-    parts = []
-    for d in DOWNLOAD_DIRS:
-        if not d.exists():
-            continue
-        for pat in ("*.crdownload", "*.tmp"):
-            try:
-                parts += list(d.glob(pat))
-            except Exception:
-                pass
-    return parts
+def _safe_mtime(p):
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _safe_size(p):
+    try:
+        return p.stat().st_size
+    except OSError:
+        return -1
 
 
 def _browser_title():
@@ -272,24 +272,34 @@ def _browser_title():
         return ""
 
 
-def wait_new_file(before, should_stop, timeout=DL_TIMEOUT):
-    """반환: Path(새 파일) / "NODATA"(확장이 창 제목을 CSNODATA로 바꿈) / None(타임아웃).
+def wait_new_file(before, should_stop, timeout=DL_TIMEOUT, log=None):
+    """반환: Path(완료된 새 파일) / "NODATA"(확장 '데이터없음' 신호) / None(타임아웃).
 
-    확장은 '조회결과 없음'이면 document.title='CSNODATA' → 창 제목으로 즉시 판단(다운로드·주소창 안 건드림)."""
+    판정 원리:
+    - 브라우저는 다운로드 '중'엔 .crdownload 임시파일을 쓰고, '완료된 뒤에야' 최종
+      .xls 로 이름을 바꾼다. 따라서 before에 없던 최종 .xls 가 보이면 = 다운로드 완료.
+    - 안전장치로 그 파일 크기가 한 번 더 같은지(쓰기 끝)만 확인하고 채택한다.
+    - '진행 중 다운로드가 있나'는 보지 않는다(죽은 .crdownload/.tmp 가 감지를 막던 버그 제거).
+    - CSNODATA 신호는 '새 파일이 하나도 없을 때만' 신뢰(파일 있는데 신호로 무시 방지)."""
     deadline = time.time() + timeout
+    last_size = {}
     while time.time() < deadline:
         if should_stop():
             raise _Stop()
-        # ① 파일 먼저 확인 — 파일이 있으면 신호와 무관하게 무조건 사용(이중 안전장치)
-        downloading = _downloading_now()
-        new = [f for f in snapshot_downloads() if f not in before]
-        if new and not downloading:
-            f = max(new, key=lambda p: p.stat().st_mtime)
-            time.sleep(0.6)
-            return f
-        # ② 그 다음에 데이터없음 신호(창 제목) 확인
-        if "CSNODATA" in _browser_title():
-            return "NODATA"
+        cands = [f for f in snapshot_downloads() if f not in before]
+        if cands:
+            f = max(cands, key=_safe_mtime)
+            sz = _safe_size(f)
+            if sz > 0 and last_size.get(f) == sz:   # 직전 폴링과 크기 동일 = 쓰기 끝
+                if log:
+                    log(f"  ↳ 다운로드 감지: {f.name} ({sz:,}B)")
+                time.sleep(0.2)
+                return f
+            last_size[f] = sz
+        else:
+            # 새 파일이 아직 없을 때만 '데이터없음' 신호를 신뢰
+            if "CSNODATA" in _browser_title():
+                return "NODATA"
         time.sleep(0.4)
     return None
 
@@ -328,10 +338,16 @@ def download_range(name, date_from, date_to, log, should_stop, check_login=False
         url = read_url()
         if "signin" in url.lower():
             return ("signin", None)
-    f = wait_new_file(before, should_stop)
+    f = wait_new_file(before, should_stop, log=log)
     if f == "NODATA":
-        return ("nofile", None)   # 확장이 '조회결과 없음' 신호 → 빠르게 데이터없음
-    return ("file", f) if f else ("nofile", None)
+        log(f"[{name}] · 확장 '데이터없음' 신호(CSNODATA) 감지 → 데이터 없음 처리")
+        return ("nofile", None)
+    if f is None:
+        # 진단: 타임아웃이면 '그동안 새로 생긴 파일'을 그대로 보여줌(감지 실패 원인 추적용)
+        seen = sorted(p.name for p in snapshot_downloads() if p not in before)
+        log(f"[{name}] · {DL_TIMEOUT}초 내 다운로드 감지 실패. 그동안 새로 생긴 파일: {seen or '없음'}")
+        return ("nofile", None)
+    return ("file", f)
 
 
 # ── 매입일자 기간조회 (기존 방식) ─────────────────────────
